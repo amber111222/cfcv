@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "629107773039",
+    "project_id": "com-example-arsen-5675d",
+    "storage_bucket": "com-example-arsen-5675d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:629107773039:android:af3b56ef160d031ed1879a",
+        "android_client_info": {
+          "package_name": "com.example.arsen"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBLx6RCUqFsVTHH6twzeTe-MlxKrwVqYo8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

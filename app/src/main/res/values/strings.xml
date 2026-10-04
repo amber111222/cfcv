@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">Решатель Тестов</string>
+    <string name="action_solve">Решить тест</string>
+    <string name="action_photo">Сделать фото</string>
+    <string name="action_gallery">Из галереи</string>
+    <string name="action_copy">Скопировать ответ</string>
+    <string name="action_settings">Настройки API</string>
+    <string name="action_clear">Очистить</string>
+    <string name="title_app">Решатель Тестов и КР</string>
+    <string name="subtitle_app">Быстрое распознавание заданий и готовые ответы</string>
+    <string name="mode_short">Только ответы</string>
+    <string name="mode_standard">Краткое пояснение</string>
+    <string name="mode_detailed">Полное решение</string>
+    <string name="status_loading">Анализирую фото теста и формирую ответ...</string>
+    <string name="status_no_photo">Сделайте фото задания или выберите из галереи</string>
+    <string name="results_copied">Ответ скопирован в буфер обмена!</string>
+</resources>
