@@ -7,21 +7,21 @@ class AppPreferences(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("test_solver_prefs", Context.MODE_PRIVATE)
 
-    var apiKey: String
-        get() = prefs.getString(KEY_API_KEY, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_API_KEY, value.trim()).apply()
+    var deepseekApiKey: String
+        get() = prefs.getString(KEY_DEEPSEEK_API_KEY, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_DEEPSEEK_API_KEY, value.trim()).apply()
 
-    var modelName: String
-        get() = prefs.getString(KEY_MODEL_NAME, "gemini-2.5-flash") ?: "gemini-2.5-flash"
-        set(value) = prefs.edit().putString(KEY_MODEL_NAME, value.trim()).apply()
+    var deepseekModel: String
+        get() = prefs.getString(KEY_DEEPSEEK_MODEL, "deepseek-chat") ?: "deepseek-chat"
+        set(value) = prefs.edit().putString(KEY_DEEPSEEK_MODEL, value.trim()).apply()
 
-    var answerMode: String
-        get() = prefs.getString(KEY_ANSWER_MODE, "SHORT") ?: "SHORT"
-        set(value) = prefs.edit().putString(KEY_ANSWER_MODE, value).apply()
+    var answerSection: String
+        get() = prefs.getString(KEY_ANSWER_SECTION, "SHORT_ANSWERS") ?: "SHORT_ANSWERS"
+        set(value) = prefs.edit().putString(KEY_ANSWER_SECTION, value).apply()
 
     companion object {
-        private const val KEY_API_KEY = "key_gemini_api"
-        private const val KEY_MODEL_NAME = "key_model_name"
-        private const val KEY_ANSWER_MODE = "key_answer_mode"
+        private const val KEY_DEEPSEEK_API_KEY = "key_deepseek_api"
+        private const val KEY_DEEPSEEK_MODEL = "key_deepseek_model"
+        private const val KEY_ANSWER_SECTION = "key_answer_section"
     }
 }

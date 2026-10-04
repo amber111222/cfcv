@@ -5,11 +5,16 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class SolverViewModel(application: Application) : AndroidViewModel(application) {
+
+    val preferences = AppPreferences(application)
+    private val apiService = DeepSeekApiService()
 
     private val _currentBitmap = MutableStateFlow<Bitmap?>(null)
     val currentBitmap: StateFlow<Bitmap?> = _currentBitmap.asStateFlow()
@@ -17,11 +22,20 @@ class SolverViewModel(application: Application) : AndroidViewModel(application) 
     private val _currentPhotoUri = MutableStateFlow<Uri?>(null)
     val currentPhotoUri: StateFlow<Uri?> = _currentPhotoUri.asStateFlow()
 
-    private val _selectedSection = MutableStateFlow(AnswerSection.SHORT_ANSWERS)
+    private val _selectedSection = MutableStateFlow(
+        try {
+            AnswerSection.valueOf(preferences.answerSection)
+        } catch (_: Exception) {
+            AnswerSection.SHORT_ANSWERS
+        }
+    )
     val selectedSection: StateFlow<AnswerSection> = _selectedSection.asStateFlow()
 
-    private val _currentPrompt = MutableStateFlow(AnswerSection.SHORT_ANSWERS.defaultPrompt)
+    private val _currentPrompt = MutableStateFlow(_selectedSection.value.defaultPrompt)
     val currentPrompt: StateFlow<String> = _currentPrompt.asStateFlow()
+
+    private val _testQuestionsText = MutableStateFlow("")
+    val testQuestionsText: StateFlow<String> = _testQuestionsText.asStateFlow()
 
     private val _lastSentPrompt = MutableStateFlow("")
     val lastSentPrompt: StateFlow<String> = _lastSentPrompt.asStateFlow()
@@ -51,11 +65,13 @@ class SolverViewModel(application: Application) : AndroidViewModel(application) 
     fun clearPhoto() {
         _currentBitmap.value = null
         _currentPhotoUri.value = null
+        _testQuestionsText.value = ""
         _uiState.value = UiState.Initial
     }
 
     fun selectSection(section: AnswerSection) {
         _selectedSection.value = section
+        preferences.answerSection = section.name
         _currentPrompt.value = section.defaultPrompt
     }
 
@@ -63,24 +79,70 @@ class SolverViewModel(application: Application) : AndroidViewModel(application) 
         _currentPrompt.value = text
     }
 
-    fun sendToDeepSeek(context: Context) {
-        val prompt = _currentPrompt.value.trim()
-        val uri = _currentPhotoUri.value
+    fun updateQuestionsText(text: String) {
+        _testQuestionsText.value = text
+    }
 
-        DeepSeekBridge.sendRequestToDeepSeek(
-            context = context,
-            photoUri = uri,
-            prompt = prompt,
-            onPromptCopied = { copied ->
-                _lastSentPrompt.value = copied
-            }
-        )
-
-        _uiState.value = UiState.Loading
+    fun saveSettings(apiKey: String, model: String) {
+        preferences.deepseekApiKey = apiKey
+        preferences.deepseekModel = model
     }
 
     /**
-     * Проверяет буфер обмена: если обнаружен ответ из DeepSeek, импортирует его в приложение
+     * Формирует полный текст запроса для DeepSeek
+     */
+    fun buildFullQuery(): String {
+        return buildString {
+            append(_currentPrompt.value.trim())
+            if (_testQuestionsText.value.isNotBlank()) {
+                append("\n\nВОПРОСЫ / ТЕКСТ ТЕСТА:\n")
+                append(_testQuestionsText.value.trim())
+            }
+        }
+    }
+
+    /**
+     * Фоновое решение:
+     * Если указан API-ключ DeepSeek — отправляет фоновый запрос через сеть (0 переключений, мгновенный ответ в приложении).
+     * Если ключ не указан — передает запрос в DeepSeek с авто-подхватом ответа из буфера.
+     */
+    fun solve(context: Context) {
+        val apiKey = preferences.deepseekApiKey
+        val fullQuery = buildFullQuery()
+
+        if (apiKey.isNotBlank()) {
+            // Режим 1: Полностью фоновый через DeepSeek API
+            _uiState.value = UiState.Loading
+            viewModelScope.launch {
+                val result = apiService.queryDeepSeek(
+                    prompt = fullQuery,
+                    apiKey = apiKey,
+                    model = preferences.deepseekModel
+                )
+                result.onSuccess { answer ->
+                    _uiState.value = UiState.Success(answer)
+                }.onFailure { error ->
+                    _uiState.value = UiState.Error(
+                        error.localizedMessage ?: "Ошибка при получении ответа от DeepSeek."
+                    )
+                }
+            }
+        } else {
+            // Режим 2: Отправка в DeepSeek с автоматическим копированием и быстрым возвратом
+            DeepSeekBridge.sendRequestToDeepSeek(
+                context = context,
+                photoUri = _currentPhotoUri.value,
+                prompt = fullQuery,
+                onPromptCopied = { copied ->
+                    _lastSentPrompt.value = copied
+                }
+            )
+            _uiState.value = UiState.Loading
+        }
+    }
+
+    /**
+     * Проверяет буфер обмена: если обнаружен ответ из DeepSeek, автоматически импортирует в приложение
      */
     fun checkClipboardForAnswer(context: Context): Boolean {
         val clipboardText = DeepSeekBridge.getClipboardContent(context, _lastSentPrompt.value)

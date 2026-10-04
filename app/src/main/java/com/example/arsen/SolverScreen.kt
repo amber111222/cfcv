@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
@@ -12,7 +13,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +33,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -41,21 +44,23 @@ import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -95,22 +100,23 @@ fun SolverScreen(
 
     val uiState by viewModel.uiState.collectAsState()
     val currentBitmap by viewModel.currentBitmap.collectAsState()
-    val currentPhotoUri by viewModel.currentPhotoUri.collectAsState()
     val selectedSection by viewModel.selectedSection.collectAsState()
     val currentPrompt by viewModel.currentPrompt.collectAsState()
+    val testQuestionsText by viewModel.testQuestionsText.collectAsState()
     val isDeepSeekInstalled by viewModel.isDeepSeekInstalled.collectAsState()
 
+    var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
     var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
     var isPromptExpanded by rememberSaveable { mutableStateOf(false) }
 
-    // Автоматическая проверка буфера обмена при возвращении в приложение из DeepSeek
+    // Авто-проверка буфера обмена при возвращении в приложение
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.checkDeepSeekStatus(context)
                 val found = viewModel.checkClipboardForAnswer(context)
                 if (found) {
-                    Toast.makeText(context, "🎉 Ответ из DeepSeek успешно загружен!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "🎉 Ответ из DeepSeek успешно получен!", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -120,7 +126,7 @@ fun SolverScreen(
         }
     }
 
-    // Лаунчер для камеры
+    // Камера лаунчер
     val takePictureLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
@@ -134,7 +140,7 @@ fun SolverScreen(
         }
     }
 
-    // Лаунчер для разрешения камеры
+    // Разрешение камеры
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -143,11 +149,11 @@ fun SolverScreen(
             tempCameraUri = uri
             takePictureLauncher.launch(uri)
         } else {
-            Toast.makeText(context, "Требуется разрешение на камеру", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Требуется доступ к камере для фото теста", Toast.LENGTH_LONG).show()
         }
     }
 
-    // Лаунчер для галереи
+    // Галерея
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -156,7 +162,7 @@ fun SolverScreen(
             if (bitmap != null) {
                 viewModel.onPhotoSelected(bitmap, uri)
             } else {
-                Toast.makeText(context, "Не удалось загрузить фото из галереи", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Не удалось открыть изображение", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -171,10 +177,22 @@ fun SolverScreen(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "DeepSeek Интеграция • Без API ключей",
+                            text = if (viewModel.preferences.deepseekApiKey.isNotBlank())
+                                "Фоновый режим DeepSeek API активен"
+                            else
+                                "DeepSeek • Автоматический подхват ответа",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showSettingsDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Настройки",
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 },
@@ -224,7 +242,7 @@ fun SolverScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Приложение передаст снимок в DeepSeek с русским промптом для мгновенного решения.",
+                            text = "Приложение передаст снимок с русским промптом в DeepSeek и сразу вернет готовый ответ.",
                             style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -271,7 +289,7 @@ fun SolverScreen(
                     }
                 }
             } else {
-                // Фото выбрано: превью
+                // Фото выбрано
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -309,7 +327,7 @@ fun SolverScreen(
                                         shape = RoundedCornerShape(50)
                                     )
                             ) {
-                                Icon(Icons.Default.Close, contentDescription = "Удалить фото")
+                                Icon(Icons.Default.Close, contentDescription = "Удалить")
                             }
                         }
 
@@ -350,7 +368,34 @@ fun SolverScreen(
                 }
             }
 
-            // Блок 2: Разделы и промпты (промпт к каждому разделу)
+            // Блок 2: Текст вопросов (опционально)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                )
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "Текст заданий / вопросы (необязательно):",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = testQuestionsText,
+                        onValueChange = { viewModel.updateQuestionsText(it) },
+                        placeholder = { Text("Вставьте скопированный текст вопросов или уточнение (например: вариант 2)...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 4,
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                }
+            }
+
+            // Блок 3: Разделы и промпты (промпт к каждому разделу)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -362,7 +407,7 @@ fun SolverScreen(
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = "Выберите раздел / формат решения:",
+                        text = "Выберите раздел / формат ответа:",
                         style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -402,7 +447,6 @@ fun SolverScreen(
                         modifier = Modifier.padding(top = 6.dp)
                     )
 
-                    // Раскрытие и редактирование промпта раздела
                     Spacer(modifier = Modifier.height(10.dp))
                     Row(
                         modifier = Modifier
@@ -418,7 +462,7 @@ fun SolverScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (isPromptExpanded) "Скрыть текст промпта" else "Посмотреть / изменить промпт раздела",
+                            text = if (isPromptExpanded) "Скрыть текст промпта" else "Посмотреть / отредактировать промпт",
                             style = MaterialTheme.typography.labelMedium.copy(
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.SemiBold
@@ -438,50 +482,66 @@ fun SolverScreen(
                                 maxLines = 6,
                                 shape = RoundedCornerShape(10.dp)
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "Этот промпт автоматически скопируется и передастся в DeepSeek вместе с фото.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 11.sp
-                            )
                         }
                     }
                 }
             }
 
-            // Блок 3: Кнопка отправки в DeepSeek
+            // Блок 4: Кнопка "Решить"
             Button(
-                onClick = { viewModel.sendToDeepSeek(context) },
-                enabled = currentBitmap != null,
+                onClick = { viewModel.solve(context) },
+                enabled = (currentBitmap != null || testQuestionsText.isNotBlank()) && uiState !is UiState.Loading,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp),
+                    .height(56.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary
                 )
             ) {
-                Icon(Icons.Default.Send, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "ОТПРАВИТЬ В ПРИЛОЖЕНИЕ DEEPSEEK",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                if (uiState is UiState.Loading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "DeepSeek решает тест...",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (viewModel.preferences.deepseekApiKey.isNotBlank())
+                            Icons.Default.Bolt
+                        else
+                            Icons.AutoMirrored.Filled.Send,
+                        contentDescription = null
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (viewModel.preferences.deepseekApiKey.isNotBlank())
+                            "⚡ РЕШИТЬ ФОНОВО ЧЕРЕЗ DEEPSEEK"
+                        else
+                            "🚀 ОТПРАВИТЬ В DEEPSEEK",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
 
-            // Кнопка вставки ответа из буфера
+            // Вставка ответа из буфера вручную
             Spacer(modifier = Modifier.height(10.dp))
             OutlinedButton(
                 onClick = {
                     val found = viewModel.checkClipboardForAnswer(context)
                     if (found) {
-                        Toast.makeText(context, "Ответ загружен из буфера!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Ответ успешно вставлен!", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(
                             context,
-                            "В буфере обмена пока нет нового текста. Скопируйте ответ в DeepSeek и нажмите сюда.",
+                            "В буфере обмена пока нет нового ответа. Скопируйте ответ в DeepSeek и нажмите сюда.",
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -491,49 +551,12 @@ fun SolverScreen(
             ) {
                 Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Вставить ответ из DeepSeek (из буфера)")
-            }
-
-            // Если DeepSeek не установлен — подсказка
-            if (!isDeepSeekInstalled) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Приложение DeepSeek не найдено",
-                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                            )
-                            Text(
-                                text = "Установите официальное приложение DeepSeek для максимального удобства.",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontSize = 11.sp
-                            )
-                        }
-                        TextButton(onClick = { DeepSeekBridge.openPlayStore(context) }) {
-                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Скачать")
-                        }
-                    }
-                }
+                Text("Вставить ответ из буфера")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Блок 4: Отображение готового ответа
+            // Блок 5: Отображение готового ответа
             when (val state = uiState) {
                 is UiState.Initial -> {
                     Card(
@@ -550,11 +573,13 @@ fun SolverScreen(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "1. Сфотографируйте тест или кр\n" +
-                                        "2. Выберите раздел (например, «Только ответы»)\n" +
-                                        "3. Нажмите «ОТПРАВИТЬ В DEEPSEEK»\n" +
-                                        "4. Скопируйте полученный ответ в DeepSeek\n" +
-                                        "5. Вернитесь сюда — ответ автоматически появится здесь!",
+                                text = if (viewModel.preferences.deepseekApiKey.isNotBlank())
+                                    "Включен 100% фоновый режим: при нажатии на кнопку приложение отправляет запрос в DeepSeek API и сразу выводит готовый ответ на экран без лишних действий."
+                                else
+                                    "1. Сфотографируйте тест и выберите раздел (например, «Только ответы»)\n" +
+                                            "2. Нажмите «ОТПРАВИТЬ В DEEPSEEK»\n" +
+                                            "3. Скопируйте готовый ответ в DeepSeek\n" +
+                                            "4. Вернитесь в приложение — оно автоматически подхватит ответ!",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 lineHeight = 18.sp
@@ -574,17 +599,22 @@ fun SolverScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
+                                .padding(20.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
+                            CircularProgressIndicator(modifier = Modifier.size(36.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = "Запрос отправлен в DeepSeek!",
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.primary
                             )
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Скопируйте сгенерированный ответ в приложении DeepSeek и вернитесь сюда — ответ автоматически появится ниже.",
+                                text = if (viewModel.preferences.deepseekApiKey.isNotBlank())
+                                    "Ожидаем генерацию ответа от DeepSeek API..."
+                                else
+                                    "Скопируйте сгенерированный ответ в приложении DeepSeek и вернитесь сюда — ответ появится автоматически.",
                                 style = MaterialTheme.typography.bodySmall,
                                 textAlign = TextAlign.Center,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -597,7 +627,7 @@ fun SolverScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
                         ),
                         shape = RoundedCornerShape(16.dp),
                         border = androidx.compose.foundation.BorderStroke(
@@ -619,7 +649,7 @@ fun SolverScreen(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Ответ из DeepSeek:",
+                                        text = "Готовый ответ:",
                                         style = MaterialTheme.typography.titleMedium.copy(
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.primary
@@ -672,6 +702,18 @@ fun SolverScreen(
                         shape = RoundedCornerShape(14.dp)
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Ошибка при решении",
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = state.errorMessage,
                                 style = MaterialTheme.typography.bodySmall.copy(
@@ -683,5 +725,91 @@ fun SolverScreen(
                 }
             }
         }
+    }
+
+    // Диалог настроек DeepSeek
+    if (showSettingsDialog) {
+        var apiKeyInput by rememberSaveable { mutableStateOf(viewModel.preferences.deepseekApiKey) }
+        var modelInput by rememberSaveable { mutableStateOf(viewModel.preferences.deepseekModel) }
+
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            title = {
+                Text(
+                    text = "Настройки DeepSeek",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        text = "По умолчанию приложение работает через установленное приложение DeepSeek (без ключей). Если вы хотите, чтобы приложение получало ответы 100% фоново по прямому API без открытия DeepSeek — введите ваш DeepSeek API ключ ниже.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = apiKeyInput,
+                        onValueChange = { apiKeyInput = it },
+                        label = { Text("DeepSeek API Key (опционально)") },
+                        placeholder = { Text("sk-...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "Модель:",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    val models = listOf("deepseek-chat" to "DeepSeek-V3 (Быстрая)", "deepseek-reasoner" to "DeepSeek-R1 (Мыслящая)")
+                    models.forEach { (m, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { modelInput = m }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = modelInput == m,
+                                onClick = { modelInput = m }
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Column {
+                                Text(text = m, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                                Text(text = label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.saveSettings(apiKeyInput, modelInput)
+                        showSettingsDialog = false
+                        Toast.makeText(context, "Настройки сохранены!", Toast.LENGTH_SHORT).show()
+                    }
+                ) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSettingsDialog = false }) {
+                    Text("Отмена")
+                }
+            }
+        )
     }
 }
