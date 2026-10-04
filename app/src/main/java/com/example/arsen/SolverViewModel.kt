@@ -1,82 +1,101 @@
 package com.example.arsen
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 
 class SolverViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val repository = SolverRepository()
-    val preferences = AppPreferences(application)
-
-    private val _uiState = MutableStateFlow<UiState>(UiState.Initial)
-    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     private val _currentBitmap = MutableStateFlow<Bitmap?>(null)
     val currentBitmap: StateFlow<Bitmap?> = _currentBitmap.asStateFlow()
 
-    private val _answerMode = MutableStateFlow(
-        try {
-            AnswerMode.valueOf(preferences.answerMode)
-        } catch (_: Exception) {
-            AnswerMode.SHORT
-        }
-    )
-    val answerMode: StateFlow<AnswerMode> = _answerMode.asStateFlow()
+    private val _currentPhotoUri = MutableStateFlow<Uri?>(null)
+    val currentPhotoUri: StateFlow<Uri?> = _currentPhotoUri.asStateFlow()
 
-    private val _customInstruction = MutableStateFlow("")
-    val customInstruction: StateFlow<String> = _customInstruction.asStateFlow()
+    private val _selectedSection = MutableStateFlow(AnswerSection.SHORT_ANSWERS)
+    val selectedSection: StateFlow<AnswerSection> = _selectedSection.asStateFlow()
 
-    fun onImageSelected(bitmap: Bitmap) {
+    private val _currentPrompt = MutableStateFlow(AnswerSection.SHORT_ANSWERS.defaultPrompt)
+    val currentPrompt: StateFlow<String> = _currentPrompt.asStateFlow()
+
+    private val _lastSentPrompt = MutableStateFlow("")
+    val lastSentPrompt: StateFlow<String> = _lastSentPrompt.asStateFlow()
+
+    private val _uiState = MutableStateFlow<UiState>(UiState.Initial)
+    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    private val _isDeepSeekInstalled = MutableStateFlow(false)
+    val isDeepSeekInstalled: StateFlow<Boolean> = _isDeepSeekInstalled.asStateFlow()
+
+    init {
+        checkDeepSeekStatus(application)
+    }
+
+    fun checkDeepSeekStatus(context: Context) {
+        _isDeepSeekInstalled.value = DeepSeekBridge.isDeepSeekInstalled(context)
+    }
+
+    fun onPhotoSelected(bitmap: Bitmap, uri: Uri?) {
         _currentBitmap.value = bitmap
-        _uiState.value = UiState.Initial
+        _currentPhotoUri.value = uri
+        if (_uiState.value !is UiState.Success) {
+            _uiState.value = UiState.Initial
+        }
     }
 
-    fun clearImage() {
+    fun clearPhoto() {
         _currentBitmap.value = null
+        _currentPhotoUri.value = null
         _uiState.value = UiState.Initial
     }
 
-    fun setMode(mode: AnswerMode) {
-        _answerMode.value = mode
-        preferences.answerMode = mode.name
+    fun selectSection(section: AnswerSection) {
+        _selectedSection.value = section
+        _currentPrompt.value = section.defaultPrompt
     }
 
-    fun setCustomInstruction(text: String) {
-        _customInstruction.value = text
+    fun updatePrompt(text: String) {
+        _currentPrompt.value = text
     }
 
-    fun saveSettings(apiKey: String, modelName: String) {
-        preferences.apiKey = apiKey
-        preferences.modelName = modelName
-    }
+    fun sendToDeepSeek(context: Context) {
+        val prompt = _currentPrompt.value.trim()
+        val uri = _currentPhotoUri.value
 
-    fun solve() {
-        val bitmap = _currentBitmap.value ?: return
+        DeepSeekBridge.sendRequestToDeepSeek(
+            context = context,
+            photoUri = uri,
+            prompt = prompt,
+            onPromptCopied = { copied ->
+                _lastSentPrompt.value = copied
+            }
+        )
 
         _uiState.value = UiState.Loading
+    }
 
-        viewModelScope.launch {
-            val result = repository.solveTest(
-                bitmap = bitmap,
-                mode = _answerMode.value,
-                customInstruction = _customInstruction.value,
-                apiKey = preferences.apiKey,
-                modelName = preferences.modelName
-            )
-
-            result.onSuccess { output ->
-                _uiState.value = UiState.Success(output)
-            }.onFailure { exception ->
-                _uiState.value = UiState.Error(
-                    exception.localizedMessage ?: "Произошла непредвиденная ошибка при решении."
-                )
-            }
+    /**
+     * Проверяет буфер обмена: если обнаружен ответ из DeepSeek, импортирует его в приложение
+     */
+    fun checkClipboardForAnswer(context: Context): Boolean {
+        val clipboardText = DeepSeekBridge.getClipboardContent(context, _lastSentPrompt.value)
+        if (!clipboardText.isNullOrBlank()) {
+            _uiState.value = UiState.Success(clipboardText)
+            return true
         }
+        return false
+    }
+
+    fun setAnswer(text: String) {
+        _uiState.value = UiState.Success(text)
+    }
+
+    fun clearAnswer() {
+        _uiState.value = UiState.Initial
     }
 }

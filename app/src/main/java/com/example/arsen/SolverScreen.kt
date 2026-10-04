@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
@@ -27,6 +26,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -36,20 +37,17 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.RocketLaunch
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
@@ -59,12 +57,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -77,11 +75,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -90,30 +91,50 @@ fun SolverScreen(
     viewModel: SolverViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
     val uiState by viewModel.uiState.collectAsState()
     val currentBitmap by viewModel.currentBitmap.collectAsState()
-    val currentMode by viewModel.answerMode.collectAsState()
-    val customInstruction by viewModel.customInstruction.collectAsState()
+    val currentPhotoUri by viewModel.currentPhotoUri.collectAsState()
+    val selectedSection by viewModel.selectedSection.collectAsState()
+    val currentPrompt by viewModel.currentPrompt.collectAsState()
+    val isDeepSeekInstalled by viewModel.isDeepSeekInstalled.collectAsState()
 
-    var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
     var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
-    var showInstructionField by rememberSaveable { mutableStateOf(false) }
+    var isPromptExpanded by rememberSaveable { mutableStateOf(false) }
 
-    // Лаунчер для съемки фото на камеру
+    // Автоматическая проверка буфера обмена при возвращении в приложение из DeepSeek
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.checkDeepSeekStatus(context)
+                val found = viewModel.checkClipboardForAnswer(context)
+                if (found) {
+                    Toast.makeText(context, "🎉 Ответ из DeepSeek успешно загружен!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // Лаунчер для камеры
     val takePictureLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
         if (success && tempCameraUri != null) {
             val bitmap = ImageUtils.loadAndCorrectBitmap(context, tempCameraUri!!)
             if (bitmap != null) {
-                viewModel.onImageSelected(bitmap)
+                viewModel.onPhotoSelected(bitmap, tempCameraUri)
             } else {
-                Toast.makeText(context, "Не удалось загрузить фото с камеры", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Не удалось загрузить фото", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    // Лаунчер для запроса разрешения камеры
+    // Лаунчер для разрешения камеры
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -122,20 +143,20 @@ fun SolverScreen(
             tempCameraUri = uri
             takePictureLauncher.launch(uri)
         } else {
-            Toast.makeText(context, "Требуется разрешение на использование камеры", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "Требуется разрешение на камеру", Toast.LENGTH_LONG).show()
         }
     }
 
-    // Лаунчер для выбора из галереи
+    // Лаунчер для галереи
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
             val bitmap = ImageUtils.loadAndCorrectBitmap(context, uri)
             if (bitmap != null) {
-                viewModel.onImageSelected(bitmap)
+                viewModel.onPhotoSelected(bitmap, uri)
             } else {
-                Toast.makeText(context, "Не удалось загрузить изображение из галереи", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Не удалось загрузить фото из галереи", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -150,19 +171,10 @@ fun SolverScreen(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "OCR русский текст + ИИ ответы",
+                            text = "DeepSeek Интеграция • Без API ключей",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showSettingsDialog = true }) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Настройки API",
-                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 },
@@ -188,40 +200,40 @@ fun SolverScreen(
                         .fillMaxWidth()
                         .padding(bottom = 16.dp),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
                     ),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(24.dp),
+                            .padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(
                             imageVector = Icons.Default.CameraAlt,
                             contentDescription = null,
-                            modifier = Modifier.size(54.dp),
+                            modifier = Modifier.size(50.dp),
                             tint = MaterialTheme.colorScheme.primary
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = "Сделайте фото теста или контрольной",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Приложение распознает русский печатный или рукописный текст, варианты ответов и пришлет готовое решение.",
+                            text = "Приложение передаст снимок в DeepSeek с русским промптом для мгновенного решения.",
                             style = MaterialTheme.typography.bodySmall,
                             textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(modifier = Modifier.height(20.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Button(
                                 onClick = {
@@ -259,7 +271,7 @@ fun SolverScreen(
                     }
                 }
             } else {
-                // Фото выбрано: показываем превью
+                // Фото выбрано: превью
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -274,7 +286,7 @@ fun SolverScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 280.dp)
+                                .heightIn(max = 240.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(MaterialTheme.colorScheme.surface)
                         ) {
@@ -283,18 +295,17 @@ fun SolverScreen(
                                 contentDescription = "Фото задания",
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .heightIn(max = 280.dp),
+                                    .heightIn(max = 240.dp),
                                 contentScale = ContentScale.Fit
                             )
 
-                            // Кнопка удаления фото
                             IconButton(
-                                onClick = { viewModel.clearImage() },
+                                onClick = { viewModel.clearPhoto() },
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
                                     .padding(8.dp)
                                     .background(
-                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
                                         shape = RoundedCornerShape(50)
                                     )
                             ) {
@@ -302,7 +313,7 @@ fun SolverScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -310,7 +321,7 @@ fun SolverScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "✓ Фото загружено",
+                                text = "✓ Фото прикреплено",
                                 style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -328,9 +339,7 @@ fun SolverScreen(
                                     Text("Переснять")
                                 }
 
-                                TextButton(
-                                    onClick = { galleryLauncher.launch("image/*") }
-                                ) {
+                                TextButton(onClick = { galleryLauncher.launch("image/*") }) {
                                     Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text("Другое")
@@ -341,38 +350,38 @@ fun SolverScreen(
                 }
             }
 
-            // Блок 2: Выбор режима ответа
+            // Блок 2: Разделы и промпты (промпт к каждому разделу)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 16.dp),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 )
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = "Формат ответа:",
+                        text = "Выберите раздел / формат решения:",
                         style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Row(
+                    LazyRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        AnswerMode.entries.forEach { mode ->
+                        items(AnswerSection.entries.toTypedArray()) { section ->
                             FilterChip(
-                                selected = currentMode == mode,
-                                onClick = { viewModel.setMode(mode) },
+                                selected = selectedSection == section,
+                                onClick = { viewModel.selectSection(section) },
                                 label = {
                                     Text(
-                                        text = mode.shortTitle,
-                                        fontSize = 12.sp
+                                        text = "${section.iconEmoji} ${section.title}",
+                                        fontSize = 13.sp
                                     )
                                 },
-                                leadingIcon = if (currentMode == mode) {
+                                leadingIcon = if (selectedSection == section) {
                                     {
                                         Icon(
                                             Icons.Default.Check,
@@ -380,26 +389,25 @@ fun SolverScreen(
                                             modifier = Modifier.size(14.dp)
                                         )
                                     }
-                                } else null,
-                                modifier = Modifier.weight(1f)
+                                } else null
                             )
                         }
                     }
 
                     Text(
-                        text = currentMode.description,
+                        text = selectedSection.shortDesc,
                         style = MaterialTheme.typography.bodySmall.copy(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         ),
-                        modifier = Modifier.padding(top = 4.dp)
+                        modifier = Modifier.padding(top = 6.dp)
                     )
 
-                    // Дополнительные указания
-                    Spacer(modifier = Modifier.height(8.dp))
+                    // Раскрытие и редактирование промпта раздела
+                    Spacer(modifier = Modifier.height(10.dp))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { showInstructionField = !showInstructionField },
+                            .clickable { isPromptExpanded = !isPromptExpanded },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -410,32 +418,42 @@ fun SolverScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (showInstructionField) "Скрыть уточнение" else "Уточнить задание (вариант, конкретные номера)",
-                            style = MaterialTheme.typography.labelMedium.copy(color = MaterialTheme.colorScheme.primary)
+                            text = if (isPromptExpanded) "Скрыть текст промпта" else "Посмотреть / изменить промпт раздела",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         )
                     }
 
-                    AnimatedVisibility(visible = showInstructionField) {
+                    AnimatedVisibility(visible = isPromptExpanded) {
                         Column {
                             Spacer(modifier = Modifier.height(8.dp))
                             OutlinedTextField(
-                                value = customInstruction,
-                                onValueChange = { viewModel.setCustomInstruction(it) },
-                                label = { Text("Например: Реши вариант 2, только чётные номера") },
+                                value = currentPrompt,
+                                onValueChange = { viewModel.updatePrompt(it) },
+                                label = { Text("Промпт для DeepSeek") },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = false,
-                                maxLines = 3,
+                                maxLines = 6,
                                 shape = RoundedCornerShape(10.dp)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Этот промпт автоматически скопируется и передастся в DeepSeek вместе с фото.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp
                             )
                         }
                     }
                 }
             }
 
-            // Блок 3: Кнопка "Решить тест"
+            // Блок 3: Кнопка отправки в DeepSeek
             Button(
-                onClick = { viewModel.solve() },
-                enabled = currentBitmap != null && uiState !is UiState.Loading,
+                onClick = { viewModel.sendToDeepSeek(context) },
+                enabled = currentBitmap != null,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(54.dp),
@@ -444,40 +462,104 @@ fun SolverScreen(
                     containerColor = MaterialTheme.colorScheme.primary
                 )
             ) {
-                if (uiState is UiState.Loading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "Считываю текст и решаю...",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                } else {
-                    Icon(Icons.Default.RocketLaunch, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "РЕШИТЬ ТЕСТ",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                Icon(Icons.Default.Send, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "ОТПРАВИТЬ В ПРИЛОЖЕНИЕ DEEPSEEK",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // Кнопка вставки ответа из буфера
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = {
+                    val found = viewModel.checkClipboardForAnswer(context)
+                    if (found) {
+                        Toast.makeText(context, "Ответ загружен из буфера!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            "В буфере обмена пока нет нового текста. Скопируйте ответ в DeepSeek и нажмите сюда.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.ContentPaste, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Вставить ответ из DeepSeek (из буфера)")
+            }
+
+            // Если DeepSeek не установлен — подсказка
+            if (!isDeepSeekInstalled) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Приложение DeepSeek не найдено",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                text = "Установите официальное приложение DeepSeek для максимального удобства.",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontSize = 11.sp
+                            )
+                        }
+                        TextButton(onClick = { DeepSeekBridge.openPlayStore(context) }) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Скачать")
+                        }
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Блок 4: Отображение результатов
+            // Блок 4: Отображение готового ответа
             when (val state = uiState) {
                 is UiState.Initial -> {
-                    if (currentBitmap != null) {
-                        Text(
-                            text = "Нажмите «РЕШИТЬ ТЕСТ», чтобы получить готовые ответы.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Text(
+                                text = "💡 Как это работает:",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "1. Сфотографируйте тест или кр\n" +
+                                        "2. Выберите раздел (например, «Только ответы»)\n" +
+                                        "3. Нажмите «ОТПРАВИТЬ В DEEPSEEK»\n" +
+                                        "4. Скопируйте полученный ответ в DeepSeek\n" +
+                                        "5. Вернитесь сюда — ответ автоматически появится здесь!",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                lineHeight = 18.sp
+                            )
+                        }
                     }
                 }
 
@@ -485,28 +567,27 @@ fun SolverScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
                         ),
-                        shape = RoundedCornerShape(16.dp)
+                        shape = RoundedCornerShape(14.dp)
                     ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(24.dp),
+                                .padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            CircularProgressIndicator(modifier = Modifier.size(42.dp))
-                            Spacer(modifier = Modifier.height(16.dp))
                             Text(
-                                text = "Распознаю русский текст на фото...",
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+                                text = "Запрос отправлен в DeepSeek!",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.primary
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "ИИ обрабатывает вопросы теста и формулирует точные ответы",
+                                text = "Скопируйте сгенерированный ответ в приложении DeepSeek и вернитесь сюда — ответ автоматически появится ниже.",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
@@ -516,7 +597,7 @@ fun SolverScreen(
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
                         ),
                         shape = RoundedCornerShape(16.dp),
                         border = androidx.compose.foundation.BorderStroke(
@@ -538,7 +619,7 @@ fun SolverScreen(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Готовый ответ:",
+                                        text = "Ответ из DeepSeek:",
                                         style = MaterialTheme.typography.titleMedium.copy(
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.primary
@@ -546,27 +627,28 @@ fun SolverScreen(
                                     )
                                 }
 
-                                // Кнопка копирования
-                                OutlinedButton(
-                                    onClick = {
-                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        val clip = ClipData.newPlainText("Ответ теста", state.outputText)
-                                        clipboard.setPrimaryClip(clip)
-                                        Toast.makeText(context, "Ответ скопирован в буфер обмена!", Toast.LENGTH_SHORT).show()
-                                    },
-                                    shape = RoundedCornerShape(8.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.ContentCopy,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Копировать")
+                                Row {
+                                    OutlinedButton(
+                                        onClick = {
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            val clip = ClipData.newPlainText("Ответ", state.outputText)
+                                            clipboard.setPrimaryClip(clip)
+                                            Toast.makeText(context, "Скопировано в буфер!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Копировать")
+                                    }
+
+                                    IconButton(onClick = { viewModel.clearAnswer() }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Очистить")
+                                    }
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
 
                             SelectionContainer {
                                 Text(
@@ -587,164 +669,19 @@ fun SolverScreen(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
                         ),
-                        shape = RoundedCornerShape(16.dp),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            MaterialTheme.colorScheme.error.copy(alpha = 0.5f)
-                        )
+                        shape = RoundedCornerShape(14.dp)
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Warning,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Ошибка при решении",
-                                    style = MaterialTheme.typography.titleSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
                             Text(
                                 text = state.errorMessage,
                                 style = MaterialTheme.typography.bodySmall.copy(
                                     color = MaterialTheme.colorScheme.onErrorContainer
                                 )
                             )
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            Button(
-                                onClick = { showSettingsDialog = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.error
-                                ),
-                                shape = RoundedCornerShape(8.dp)
-                            ) {
-                                Icon(Icons.Default.Settings, contentDescription = null)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Настроить API ключ")
-                            }
                         }
                     }
                 }
             }
         }
-    }
-
-    // Диалог настроек
-    if (showSettingsDialog) {
-        var apiKeyInput by rememberSaveable { mutableStateOf(viewModel.preferences.apiKey) }
-        var modelInput by rememberSaveable { mutableStateOf(viewModel.preferences.modelName) }
-
-        AlertDialog(
-            onDismissRequest = { showSettingsDialog = false },
-            title = {
-                Text(
-                    text = "Настройки ИИ и API",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                )
-            },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        text = "Для распознавания русского текста и ответов используется Gemini Vision API.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedTextField(
-                        value = apiKeyInput,
-                        onValueChange = { apiKeyInput = it },
-                        label = { Text("Gemini API Key") },
-                        placeholder = { Text("AIzaSy...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    TextButton(
-                        onClick = {
-                            val browserIntent = Intent(
-                                Intent.ACTION_VIEW,
-                                Uri.parse("https://aistudio.google.com/apikey")
-                            )
-                            context.startActivity(browserIntent)
-                        }
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.HelpOutline,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Получить бесплатный ключ на Google AI Studio",
-                            fontSize = 12.sp
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(
-                        text = "Модель ИИ:",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    val models = listOf("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash")
-                    models.forEach { m ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { modelInput = m }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            androidx.compose.material3.RadioButton(
-                                selected = modelInput == m,
-                                onClick = { modelInput = m }
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = m,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.saveSettings(apiKeyInput, modelInput)
-                        showSettingsDialog = false
-                        Toast.makeText(context, "Настройки сохранены!", Toast.LENGTH_SHORT).show()
-                    }
-                ) {
-                    Text("Сохранить")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSettingsDialog = false }) {
-                    Text("Отмена")
-                }
-            }
-        )
     }
 }
