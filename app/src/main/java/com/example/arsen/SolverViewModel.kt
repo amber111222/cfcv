@@ -43,6 +43,12 @@ class SolverViewModel(application: Application) : AndroidViewModel(application) 
     private val _uiState = MutableStateFlow<UiState>(UiState.Initial)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
+    private val _statusMessage = MutableStateFlow("")
+    val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
+
+    private val _showEmbeddedWeb = MutableStateFlow(false)
+    val showEmbeddedWeb: StateFlow<Boolean> = _showEmbeddedWeb.asStateFlow()
+
     private val _isDeepSeekInstalled = MutableStateFlow(false)
     val isDeepSeekInstalled: StateFlow<Boolean> = _isDeepSeekInstalled.asStateFlow()
 
@@ -83,14 +89,19 @@ class SolverViewModel(application: Application) : AndroidViewModel(application) 
         _testQuestionsText.value = text
     }
 
+    fun toggleEmbeddedWeb() {
+        _showEmbeddedWeb.value = !_showEmbeddedWeb.value
+    }
+
+    fun setStatusMessage(msg: String) {
+        _statusMessage.value = msg
+    }
+
     fun saveSettings(apiKey: String, model: String) {
         preferences.deepseekApiKey = apiKey
         preferences.deepseekModel = model
     }
 
-    /**
-     * Формирует полный текст запроса для DeepSeek
-     */
     fun buildFullQuery(): String {
         return buildString {
             append(_currentPrompt.value.trim())
@@ -102,17 +113,17 @@ class SolverViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Фоновое решение:
-     * Если указан API-ключ DeepSeek — отправляет фоновый запрос через сеть (0 переключений, мгновенный ответ в приложении).
-     * Если ключ не указан — передает запрос в DeepSeek с авто-подхватом ответа из буфера.
+     * Фоновое решение без необходимости внешних API:
+     * 1. Если указан ключ DeepSeek API — отправляет HTTP запрос
+     * 2. Иначе — отправляет через фоновый встроенный DeepSeek Web Solver
      */
-    fun solve(context: Context) {
+    fun solve(context: Context, webSolver: DeepSeekWebSolver) {
         val apiKey = preferences.deepseekApiKey
         val fullQuery = buildFullQuery()
 
+        _uiState.value = UiState.Loading
+
         if (apiKey.isNotBlank()) {
-            // Режим 1: Полностью фоновый через DeepSeek API
-            _uiState.value = UiState.Loading
             viewModelScope.launch {
                 val result = apiService.queryDeepSeek(
                     prompt = fullQuery,
@@ -128,22 +139,16 @@ class SolverViewModel(application: Application) : AndroidViewModel(application) 
                 }
             }
         } else {
-            // Режим 2: Отправка в DeepSeek с автоматическим копированием и быстрым возвратом
-            DeepSeekBridge.sendRequestToDeepSeek(
-                context = context,
-                photoUri = _currentPhotoUri.value,
-                prompt = fullQuery,
-                onPromptCopied = { copied ->
-                    _lastSentPrompt.value = copied
-                }
-            )
-            _uiState.value = UiState.Loading
+            // Без API: отправляем через фоновый веб-мост DeepSeek
+            _lastSentPrompt.value = fullQuery
+            webSolver.sendPrompt(fullQuery)
         }
     }
 
-    /**
-     * Проверяет буфер обмена: если обнаружен ответ из DeepSeek, автоматически импортирует в приложение
-     */
+    fun onWebAnswerReceived(answer: String) {
+        _uiState.value = UiState.Success(answer)
+    }
+
     fun checkClipboardForAnswer(context: Context): Boolean {
         val clipboardText = DeepSeekBridge.getClipboardContent(context, _lastSentPrompt.value)
         if (!clipboardText.isNullOrBlank()) {
@@ -151,10 +156,6 @@ class SolverViewModel(application: Application) : AndroidViewModel(application) 
             return true
         }
         return false
-    }
-
-    fun setAnswer(text: String) {
-        _uiState.value = UiState.Success(text)
     }
 
     fun clearAnswer() {
